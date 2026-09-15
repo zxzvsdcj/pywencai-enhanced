@@ -38,7 +38,7 @@ pip install git+https://github.com/HeRiki/pywencai-enhanced.git
 按 tag 安装指定版本：
 
 ```bash
-pip install git+https://github.com/HeRiki/pywencai-enhanced.git@v0.2.1
+pip install git+https://github.com/HeRiki/pywencai-enhanced.git@v0.3.0
 ```
 
 本地开发安装：
@@ -90,6 +90,7 @@ df = pywencai.get(
 ## 对外接口
 
 - `from pywencai import get`
+- `from pywencai import set_default_cookie, get_default_cookie`
 - `pywencai.wencai.get`
 - `pywencai.headers.headers`
 - `pywencai.convert.convert`
@@ -113,7 +114,9 @@ df = pywencai.get(
 
 ## Cookie 和 Node.js 说明
 
-- 真实请求场景下，仍建议提供有效的 iWenCai cookie。
+- 当前 `get-robot-data` 入口是 `https://www.iwencai.com/unifiedwap/unified-wap/v2/result/get-robot-data`，必须 form POST。旧路径 `/customized/chart/get-robot-data` 已 404；对新路径发 JSON body 会返回「缺少必要参数」。
+- `set_default_cookie(...)` 安装进程默认 Cookie。`get()` 未显式传 `cookie=` 时用这一份；调用点传入的非空 `cookie=` 仍覆盖默认。
+- 真实请求场景下，仍建议提供有效的 iWenCai cookie。生效键是 `user`、`userid`、`ticket`。
 - 普通使用者不需要执行 `npm install`，因为仓库已经带了构建好的 `hexin-v.bundle.js`。
 - 为了获得更稳定的 token 生成能力，运行环境仍推荐安装 Node.js。
 - 如果没有 Node.js，包会回退到 Python 生成 token；这个回退路径可以用，但稳定性可能不如 Node 方案。

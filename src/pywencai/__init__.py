@@ -3,7 +3,7 @@ import logging
 from . import convert as _convert_module
 from . import headers as _headers_module
 from . import wencai as _wencai_module
-from .wencai import get
+from .wencai import get, get_default_cookie, set_default_cookie
 
 
 def _module_logger_specs():
@@ -48,6 +48,8 @@ def reset_logger():
 
 __all__ = [
     "get",
+    "set_default_cookie",
+    "get_default_cookie",
     "configure_logger",
     "configure_runtime_logging",
     "is_runtime_logging_enabled",

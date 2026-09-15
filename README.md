@@ -38,7 +38,7 @@ pip install git+https://github.com/HeRiki/pywencai-enhanced.git
 Install a tagged release:
 
 ```bash
-pip install git+https://github.com/HeRiki/pywencai-enhanced.git@v0.2.1
+pip install git+https://github.com/HeRiki/pywencai-enhanced.git@v0.3.0
 ```
 
 For local development:
@@ -90,6 +90,7 @@ Use `strict=True` for maintenance jobs, fallback data sources, probes, and other
 ## Supported public API
 
 - `from pywencai import get`
+- `from pywencai import set_default_cookie, get_default_cookie`
 - `pywencai.wencai.get`
 - `pywencai.headers.headers`
 - `pywencai.convert.convert`
@@ -113,7 +114,9 @@ The current `get(...)` interface remains compatible with these common parameters
 
 ## Cookie and Node.js notes
 
-- A valid iWenCai cookie is still recommended for reliable live requests.
+- The live `get-robot-data` endpoint is `https://www.iwencai.com/unifiedwap/unified-wap/v2/result/get-robot-data` and must be sent as form POST. The old `/customized/chart/get-robot-data` JSON path now returns 404; JSON body on the new path returns "缺少必要参数".
+- `set_default_cookie(...)` installs a process-wide cookie. `get()` uses it when the call does not pass `cookie=`. An explicit non-empty `cookie=` still wins.
+- A valid iWenCai cookie is still recommended for reliable live requests. The required live keys are `user`, `userid`, and `ticket`.
 - Normal users do not need `npm install`. The repository already includes the built `hexin-v.bundle.js`.
 - Node.js is still recommended for best token-generation compatibility at runtime.
 - If Node.js is not available, the package falls back to a Python-generated token. That fallback is convenient, but it may be less reliable than the Node-based path.

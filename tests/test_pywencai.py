@@ -34,6 +34,7 @@ class TestPyWencaiHelpers(unittest.TestCase):
         headers_module.clear_runtime_cache()
         headers_module.clear_runtime_metrics()
         wencai_module.clear_runtime_state()
+        wencai_module.set_default_cookie("")
         pywencai.reset_logger()
 
     def _read_fixture(self, name):
@@ -51,10 +52,45 @@ class TestPyWencaiHelpers(unittest.TestCase):
 
     def test_package_exports_expected_public_api(self):
         self.assertTrue(callable(pywencai.get))
+        self.assertTrue(callable(pywencai.set_default_cookie))
+        self.assertTrue(callable(pywencai.get_default_cookie))
         self.assertTrue(callable(pywencai.configure_logger))
         self.assertTrue(callable(pywencai.configure_runtime_logging))
         self.assertTrue(callable(pywencai.is_runtime_logging_enabled))
         self.assertTrue(callable(pywencai.reset_logger))
+
+    def test_get_uses_process_default_cookie_when_omitted(self):
+        captured = {}
+
+        def fake_robot(**kwargs):
+            captured["cookie"] = kwargs.get("cookie")
+            raise RuntimeError("stop-after-cookie")
+
+        pywencai.set_default_cookie("user=a; userid=1; ticket=t")
+        with patch.object(wencai_module, "get_robot_data", side_effect=fake_robot):
+            with self.assertRaisesRegex(RuntimeError, "stop-after-cookie"):
+                wencai_module.get(query="十日涨幅前1", log=False, strict=True)
+
+        self.assertEqual(captured["cookie"], "user=a; userid=1; ticket=t")
+
+    def test_explicit_cookie_overrides_process_default(self):
+        captured = {}
+
+        def fake_robot(**kwargs):
+            captured["cookie"] = kwargs.get("cookie")
+            raise RuntimeError("stop-after-cookie")
+
+        pywencai.set_default_cookie("user=a; userid=1; ticket=t")
+        with patch.object(wencai_module, "get_robot_data", side_effect=fake_robot):
+            with self.assertRaisesRegex(RuntimeError, "stop-after-cookie"):
+                wencai_module.get(
+                    query="十日涨幅前1",
+                    cookie="user=explicit; userid=2; ticket=x",
+                    log=False,
+                    strict=True,
+                )
+
+        self.assertEqual(captured["cookie"], "user=explicit; userid=2; ticket=x")
 
     def test_tab1_handler_uses_dict_copy_instead_of_invalid_set(self):
         comp = {
@@ -476,7 +512,7 @@ class TestPyWencaiHelpers(unittest.TestCase):
             bucket_label="bucket-a",
             query="测试",
             query_type="stock",
-            url="https://www.iwencai.com/customized/chart/get-robot-data",
+            url="https://www.iwencai.com/unifiedwap/unified-wap/v2/result/get-robot-data",
         )
         headers_module.record_request_event(
             request_id="robot-000001",
@@ -488,7 +524,7 @@ class TestPyWencaiHelpers(unittest.TestCase):
             refresh_reason="robot.auth_error",
             query="测试",
             query_type="stock",
-            url="https://www.iwencai.com/customized/chart/get-robot-data",
+            url="https://www.iwencai.com/unifiedwap/unified-wap/v2/result/get-robot-data",
         )
 
         metrics = headers_module.get_runtime_metrics()
@@ -762,8 +798,16 @@ class TestPyWencaiHelpers(unittest.TestCase):
             )
 
         self.assertIsNotNone(result)
-        self.assertEqual(session.request.call_args.kwargs["url"], wencai_module.ROBOT_DATA_URL)
-        self.assertTrue(session.request.call_args.kwargs["url"].startswith("https://"))
+        request_kwargs = session.request.call_args.kwargs
+        self.assertEqual(
+            request_kwargs["url"],
+            "https://www.iwencai.com/unifiedwap/unified-wap/v2/result/get-robot-data",
+        )
+        self.assertEqual(request_kwargs["url"], wencai_module.ROBOT_DATA_URL)
+        self.assertTrue(request_kwargs["url"].startswith("https://"))
+        self.assertIsNone(request_kwargs.get("json"))
+        self.assertEqual(request_kwargs["data"]["question"], "十日涨幅前十")
+        self.assertEqual(request_kwargs["data"]["source"], "Ths_iwencai_Xuangu")
 
     def test_get_robot_data_initial_request_bypasses_token_cache(self):
         response = Mock()
@@ -1097,6 +1141,18 @@ class TestPyWencaiHelpers(unittest.TestCase):
 
         self.assertIsInstance(result, pd.DataFrame)
         self.assertTrue(result.empty)
+
+    def test_get_strict_loop_raises_when_page_count_mismatches(self):
+        params = {
+            "data": {"condition": "cond-a"},
+            "row_count": 3,
+            "url_params": {"question": "测试"},
+        }
+        partial = pd.DataFrame([{"股票代码": "600001"}, {"股票代码": "600002"}])
+        with patch.object(wencai_module, "get_robot_data", return_value=params):
+            with patch.object(wencai_module, "loop_page", return_value=partial):
+                with self.assertRaises(wencai_module.WencaiRowCountMismatchError):
+                    wencai_module.get(query="测试", loop=True, strict=True, log=False)
 
     def test_get_strict_true_reraises_original_exception(self):
         with patch.object(

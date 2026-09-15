@@ -37,12 +37,15 @@ REQUEST_CONFIG = {
     "page": {"timeout": (5, 10), "retry": 10, "sleep": 0},
 }
 IWENCAI_BASE_URL = "https://www.iwencai.com"
-ROBOT_DATA_URL = f"{IWENCAI_BASE_URL}/customized/chart/get-robot-data"
+ROBOT_DATA_URL = f"{IWENCAI_BASE_URL}/unifiedwap/unified-wap/v2/result/get-robot-data"
 LANDING_DATA_URL = f"{IWENCAI_BASE_URL}/gateway/urp/v7/landing/getDataList"
 STOCK_PICK_FIND_URL = f"{IWENCAI_BASE_URL}/unifiedwap/unified-wap/v2/stock-pick/find"
+WENCAI_QUERY_COVERAGE_ATTR = "wencai_query_coverage"
 
 _SESSION = None
 _SESSION_LOCK = threading.RLock()
+_DEFAULT_COOKIE = ""
+_DEFAULT_COOKIE_LOCK = threading.RLock()
 
 
 class WencaiResponseError(Exception):
@@ -51,6 +54,18 @@ class WencaiResponseError(Exception):
 
 class WencaiUnexpectedResponseError(WencaiResponseError):
     """问财返回了非预期结构。"""
+
+
+class WencaiRowCountMismatchError(WencaiUnexpectedResponseError):
+    """问财全量分页结果与服务端声明总行数不一致。"""
+
+    def __init__(self, expected_row_count, received_row_count):
+        self.expected_row_count = int(expected_row_count)
+        self.received_row_count = int(received_row_count)
+        super().__init__(
+            "问财全量分页行数不一致: "
+            f"expected={self.expected_row_count}, received={self.received_row_count}"
+        )
 
 
 class WencaiEmptyDataError(WencaiResponseError):
@@ -65,6 +80,25 @@ def get_session():
             _SESSION.trust_env = False
             _SESSION.headers.update({"Connection": "keep-alive"})
         return _SESSION
+
+
+def set_default_cookie(cookie):
+    """进程内问财 Cookie：DataLoader 初始化时写一次，get() 未显式传 cookie 时使用。"""
+    global _DEFAULT_COOKIE
+    with _DEFAULT_COOKIE_LOCK:
+        _DEFAULT_COOKIE = str(cookie or "").strip()
+
+
+def get_default_cookie():
+    with _DEFAULT_COOKIE_LOCK:
+        return _DEFAULT_COOKIE
+
+
+def _resolve_request_cookie(cookie):
+    text = str(cookie or "").strip()
+    if text:
+        return text
+    return get_default_cookie()
 
 
 def clear_runtime_state():
@@ -643,7 +677,7 @@ def _convert_robot_response_with_retry(
             headers_dict=refreshed_headers,
             timeout=timeout,
             request_params=request_params,
-            json_body=data,
+            form_data=data,
             log=log,
             context=refreshed_context,
             attempt_stage="refresh",
@@ -729,7 +763,7 @@ def get_robot_data(**kwargs):
                     headers_dict=req_headers,
                     timeout=REQUEST_CONFIG["robot"]["timeout"],
                     request_params=request_params,
-                    json_body=data,
+                    form_data=data,
                     log=log,
                     context=request_context,
                     attempt_stage="initial",
@@ -773,7 +807,7 @@ def get_robot_data(**kwargs):
                     headers_dict=refreshed_headers,
                     timeout=REQUEST_CONFIG["robot"]["timeout"],
                     request_params=request_params,
-                    json_body=data,
+                    form_data=data,
                     log=log,
                     context=refreshed_context,
                     attempt_stage="refresh",
@@ -1041,8 +1075,21 @@ def loop_page(loop, row_count, url_params, **kwargs):
     """循环分页。"""
     count = 0
     strict = kwargs.get("strict", False)
-    perpage = kwargs.pop("perpage", 100)
-    max_page = math.ceil(row_count / perpage)
+    page_form_data = _build_page_form_data(url_params, kwargs)
+    try:
+        total_row_count = int(row_count)
+        perpage = int(page_form_data["perpage"])
+    except (KeyError, TypeError, ValueError, OverflowError) as exc:
+        if strict:
+            raise WencaiUnexpectedResponseError("循环分页行数参数无效") from exc
+        return pd.DataFrame()
+    if total_row_count <= 0:
+        return pd.DataFrame()
+    if perpage <= 0:
+        if strict:
+            raise WencaiUnexpectedResponseError("循环分页每页行数必须大于0")
+        return pd.DataFrame()
+    max_page = math.ceil(total_row_count / perpage)
     if max_page <= 0:
         return pd.DataFrame()
     result = None
@@ -1110,6 +1157,29 @@ def _fetch_result_dataframe(params, loop=False, log=False, strict=False, **kwarg
                 if strict:
                     raise WencaiUnexpectedResponseError("循环分页返回None")
                 return pd.DataFrame()
+            expected_row_count = int(row_count)
+            received_row_count = int(len(result))
+            all_pages_requested = loop is True
+            coverage_complete = (
+                all_pages_requested
+                and expected_row_count > 0
+                and received_row_count == expected_row_count
+            )
+            result.attrs[WENCAI_QUERY_COVERAGE_ATTR] = {
+                "mode": (
+                    "loop_all_pages"
+                    if all_pages_requested
+                    else "loop_limited_pages"
+                ),
+                "expected_row_count": expected_row_count,
+                "received_row_count": received_row_count,
+                "complete": coverage_complete,
+            }
+            if strict and all_pages_requested and not coverage_complete:
+                raise WencaiRowCountMismatchError(
+                    expected_row_count,
+                    received_row_count,
+                )
             log and logger.info(f"循环分页完成，返回结果形状: {result.shape}")
             return result
 
@@ -1132,6 +1202,7 @@ def _fetch_result_dataframe(params, loop=False, log=False, strict=False, **kwarg
 def get(loop=False, **kwargs):
     """获取结果。"""
     kwargs = _normalize_get_kwargs(kwargs)
+    kwargs["cookie"] = _resolve_request_cookie(kwargs.get("cookie"))
     log = _resolve_runtime_log_flag(kwargs.get("log", True))
     kwargs["log"] = log
     strict = kwargs.get("strict", False)
